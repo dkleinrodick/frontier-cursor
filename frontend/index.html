@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontier Flight Scraper - Production</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                        <line x1="12" y1="22.08" x2="12" y2="12"/>
+                    </svg>
+                    Frontier Flight Scraper
+                </h1>
+                <div class="header-status">
+                    <div class="status-indicator" id="connectionStatus">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Navigation Tabs -->
+            <div class="tabs">
+                <button class="tab-button active" data-tab="scrape">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    Scrape Flights
+                </button>
+                <button class="tab-button" data-tab="bulk">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <line x1="8" y1="6" x2="21" y2="6"/>
+                        <line x1="8" y1="12" x2="21" y2="12"/>
+                        <line x1="8" y1="18" x2="21" y2="18"/>
+                        <line x1="3" y1="6" x2="3.01" y2="6"/>
+                        <line x1="3" y1="12" x2="3.01" y2="12"/>
+                        <line x1="3" y1="18" x2="3.01" y2="18"/>
+                    </svg>
+                    Bulk Scraping
+                </button>
+                <button class="tab-button" data-tab="proxy">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="2" y="7" width="20" height="14" rx="2"/>
+                        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+                    </svg>
+                    Proxy Status
+                </button>
+                <button class="tab-button" data-tab="config">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M12 1v6m0 6v6m5.2-13.2l-3.5 3.5m-3.5 3.5l-3.5 3.5m13.2-5.2l-3.5 3.5m-3.5-3.5l-3.5-3.5"/>
+                    </svg>
+                    Configuration
+                </button>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="tab-content active" id="scrape">
+                <div class="card">
+                    <h2>Single Route Scraping</h2>
+                    <form id="scrapeForm" class="form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="origin">Origin Airport (IATA)</label>
+                                <input type="text" id="origin" placeholder="ORD" maxlength="3" pattern="[A-Z]{3}" required>
+                                <span class="form-hint">3-letter code (e.g., ORD, DEN)</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="destination">Destination Airport (IATA)</label>
+                                <input type="text" id="destination" placeholder="CUN" maxlength="3" pattern="[A-Z]{3}" required>
+                                <span class="form-hint">3-letter code (e.g., CUN, LAX)</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="date">Travel Date</label>
+                                <input type="date" id="date" required>
+                                <span class="form-hint">Future date only</span>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary" id="scrapeButton">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <polygon points="5 3 19 12 5 21 5 3"/>
+                            </svg>
+                            Start Scraping
+                        </button>
+                    </form>
+
+                    <div id="scrapeProgress" class="progress-section" style="display: none;">
+                        <div class="progress-header">
+                            <span id="progressText">Scraping in progress...</span>
+                            <span id="progressAttempt" class="badge">Attempt 1/3</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                    </div>
+
+                    <div id="scrapeResults" class="results-section" style="display: none;"></div>
+                </div>
+
+                <!-- Live Updates -->
+                <div class="card">
+                    <h2>Live Activity Feed</h2>
+                    <div id="activityFeed" class="activity-feed">
+                        <div class="activity-item">
+                            <span class="activity-time">System</span>
+                            <span class="activity-message">Waiting for scraping activity...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="bulk">
+                <div class="card">
+                    <h2>Bulk Route Scraping</h2>
+                    <div class="form-group">
+                        <label for="routesInput">Routes (one per line: ORIGIN DEST DATE)</label>
+                        <textarea id="routesInput" rows="10" placeholder="ORD CUN 2025-11-15&#10;DEN LAX 2025-11-16&#10;ATL MIA 2025-11-17"></textarea>
+                        <span class="form-hint">Format: ORIGIN DESTINATION YYYY-MM-DD (space or comma separated)</span>
+                    </div>
+                    <button id="bulkScrapeButton" class="btn btn-primary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="10 8 16 12 10 16"/>
+                        </svg>
+                        Start Bulk Scraping
+                    </button>
+
+                    <div id="bulkProgress" style="display: none;">
+                        <div class="progress-stats">
+                            <div class="stat-card">
+                                <div class="stat-value" id="bulkTotal">0</div>
+                                <div class="stat-label">Total Routes</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="bulkProcessed">0</div>
+                                <div class="stat-label">Processed</div>
+                            </div>
+                            <div class="stat-card success">
+                                <div class="stat-value" id="bulkSuccess">0</div>
+                                <div class="stat-label">Successful</div>
+                            </div>
+                            <div class="stat-card error">
+                                <div class="stat-value" id="bulkFailed">0</div>
+                                <div class="stat-label">Failed</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="bulkResults" class="results-section" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="proxy">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Decodo Proxy Statistics</h2>
+                        <button id="refreshProxyStats" class="btn btn-secondary">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                    <div id="proxyStats" class="proxy-stats-grid"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Proxy Details</h2>
+                    <div id="proxyDetails" class="proxy-details"></div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="config">
+                <div class="card">
+                    <h2>System Configuration</h2>
+                    <div id="configDisplay" class="config-display"></div>
+                </div>
+
+                <div class="card">
+                    <h2>System Health</h2>
+                    <div id="healthCheck" class="health-check"></div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Frontier Flight Scraper v1.0.0 &bull; Production Build</p>
+        </footer>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

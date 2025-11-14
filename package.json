@@ -1,0 +1,42 @@
+{
+  "name": "frontier-scraper-production",
+  "version": "1.0.0",
+  "description": "Production-ready Frontier Airlines flight scraper with Decodo proxy integration",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "test": "node backend/test-connection.js",
+    "install-browsers": "npx playwright install chromium"
+  },
+  "keywords": [
+    "frontier",
+    "airlines",
+    "scraper",
+    "flight",
+    "proxy",
+    "decodo"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "playwright": "^1.40.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "ws": "^8.14.2",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
+    "helmet": "^7.1.0",
+    "compression": "^1.7.4",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
