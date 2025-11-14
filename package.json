@@ -6,7 +6,6 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
-    "test": "node backend/test-connection.js",
     "install-browsers": "npx playwright install chromium"
   },
   "keywords": [

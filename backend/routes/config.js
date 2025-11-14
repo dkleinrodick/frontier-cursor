@@ -21,12 +21,14 @@ router.get('/', (req, res) => {
       method: process.env.SCRAPER_METHOD || 'playwright',
       timeoutSeconds: parseInt(process.env.SCRAPER_TIMEOUT_SECONDS) || 90,
       maxRetries: parseInt(process.env.SCRAPER_MAX_RETRIES) || 3,
-      concurrentRoutes: parseInt(process.env.SCRAPER_CONCURRENT_ROUTES) || 5
+      concurrentRoutes: parseInt(process.env.SCRAPER_CONCURRENT_ROUTES) || 5,
+      bypass1Headless: process.env.BYPASS1_HEADLESS !== 'false' // Default true
     },
     decodo: {
       enabled: !!(process.env.DECODO_USERNAME && process.env.DECODO_PASSWORD),
       maxUsesPerMinute: parseInt(process.env.DECODO_MAX_USES_PER_MINUTE) || 2,
-      maxWorkers: parseInt(process.env.DECODO_MAX_WORKERS) || 3
+      // maxWorkers defaults to concurrentRoutes to keep them in sync
+      maxWorkers: parseInt(process.env.DECODO_MAX_WORKERS) || parseInt(process.env.SCRAPER_CONCURRENT_ROUTES) || 5
     },
     cache: {
       enabled: process.env.CACHE_ENABLED === 'true',
@@ -75,7 +77,8 @@ router.post('/update', async (req, res) => {
       'DECODO_MAX_USES_PER_MINUTE',
       'DECODO_MAX_WORKERS',
       'LOG_LEVEL',
-      'CACHE_ENABLED'
+      'CACHE_ENABLED',
+      'BYPASS1_HEADLESS'
     ];
 
     for (const [key, value] of Object.entries(updates)) {

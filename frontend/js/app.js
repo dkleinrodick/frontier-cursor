@@ -111,8 +111,24 @@ class FrontierScraperApp {
         }
         break;
 
+      case 'bulk_by_origin_started':
+        this.handleBulkByOriginStarted(data);
+        break;
+
+      case 'bulk_by_origin_progress':
+        this.handleBulkByOriginProgress(data);
+        break;
+
       case 'bulk_by_origin_complete':
         this.handleBulkByOriginComplete(data);
+        break;
+
+      case 'bulk_all_started':
+        this.handleBulkAllStarted(data);
+        break;
+
+      case 'bulk_all_progress':
+        this.handleBulkAllProgress(data);
         break;
 
       case 'bulk_all_complete':
@@ -128,14 +144,24 @@ class FrontierScraperApp {
         this.addActivity('Proxy Test', `✗ Error: ${data.error}`);
         break;
 
+      case 'proxy_batch_test_progress':
+        this.handleProxyBatchTestProgress(data);
+        break;
+
       case 'proxy_batch_test_complete':
         this.handleProxyBatchTestComplete(data);
         break;
 
       case 'bulk_route_cached':
+        this.handleBulkRouteUpdate(data, 'cached');
+        break;
+
       case 'bulk_route_complete':
+        this.handleBulkRouteUpdate(data, 'complete');
+        break;
+
       case 'bulk_route_error':
-        // Individual route updates during bulk operations
+        this.handleBulkRouteUpdate(data, 'error');
         break;
     }
   }
@@ -228,6 +254,29 @@ class FrontierScraperApp {
     const loadProxyListBtn = document.getElementById('loadProxyList');
     if (loadProxyListBtn) {
       loadProxyListBtn.addEventListener('click', () => this.loadProxyList());
+    }
+
+    // Enable/disable Load Proxies button based on textarea content
+    const proxyListTextarea = document.getElementById('proxyList');
+    if (proxyListTextarea && loadProxyListBtn) {
+      const updateButtonState = () => {
+        const hasContent = proxyListTextarea.value.trim().length > 0;
+        const hasTestedProxies = this.pendingProxyTest && this.pendingProxyTest.workingProxies && this.pendingProxyTest.workingProxies.length > 0;
+        // Enable if there's content in textarea OR if we have tested proxies ready
+        loadProxyListBtn.disabled = !hasContent && !hasTestedProxies;
+      };
+      
+      // Listen for input events (typing)
+      proxyListTextarea.addEventListener('input', updateButtonState);
+      
+      // Listen for paste events
+      proxyListTextarea.addEventListener('paste', () => {
+        // Use setTimeout to check after paste completes
+        setTimeout(updateButtonState, 10);
+      });
+      
+      // Check initial state on page load
+      updateButtonState();
     }
   }
 
@@ -772,13 +821,41 @@ class FrontierScraperApp {
     testBtn.textContent = 'Testing...';
     loadBtn.disabled = true;
     resultsDiv.style.display = 'block';
-    resultsDiv.innerHTML = '<p>Testing proxies... This may take a while.</p>';
+    
+    // Initialize results array for real-time updates
+    this.proxyTestResults = [];
+    
+    // Show initial progress display
+    resultsDiv.innerHTML = `
+      <div style="margin-bottom: 15px;">
+        <h3>Testing Proxies: 0/${proxies.length} (0%)</h3>
+        <div style="background: var(--border); height: 20px; border-radius: 10px; overflow: hidden; margin: 10px 0;">
+          <div style="background: var(--primary); height: 100%; width: 0%; transition: width 0.3s;"></div>
+        </div>
+        <p><strong>Working:</strong> 0 | <strong>Failed:</strong> 0</p>
+      </div>
+      <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; border-radius: 4px;">
+        ${proxies.map(() => `
+          <div style="padding: 5px; border-bottom: 1px solid var(--border); opacity: 0.5;">
+            <span style="color: var(--text-secondary);">⏳</span>
+            <span style="margin-left: 10px; color: var(--text-secondary);">Waiting...</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
 
     try {
+      // Only include username/password if needed (not all proxies have embedded credentials)
+      const requestBody = { proxies };
+      if (proxiesWithoutCredentials.length > 0) {
+        requestBody.username = username;
+        requestBody.password = password;
+      }
+
       const response = await fetch(`${this.apiBase}/api/proxy/test-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ proxies, username, password })
+        body: JSON.stringify(requestBody)
       });
 
       const result = await response.json();
@@ -801,24 +878,100 @@ class FrontierScraperApp {
     }
   }
 
-  handleProxyBatchTestComplete(data) {
+  handleProxyBatchTestProgress(data) {
     const resultsDiv = document.getElementById('proxyTestResults');
     const loadBtn = document.getElementById('loadProxyList');
 
     if (!resultsDiv) return;
 
+    // Store results for final completion
+    if (!this.proxyTestResults) {
+      this.proxyTestResults = [];
+    }
+    this.proxyTestResults = data.results;
+
     const working = data.results.filter(r => r.success);
     const failed = data.results.filter(r => !r.success);
+    const progressPercent = Math.round((data.tested / data.total) * 100);
 
     let html = `
       <div style="margin-bottom: 15px;">
-        <h3>Test Results: ${data.working}/${data.total} Working</h3>
+        <h3>Testing Proxies: ${data.tested}/${data.total} (${progressPercent}%)</h3>
+        <div style="background: var(--border); height: 20px; border-radius: 10px; overflow: hidden; margin: 10px 0;">
+          <div style="background: var(--primary); height: 100%; width: ${progressPercent}%; transition: width 0.3s;"></div>
+        </div>
         <p><strong>Working:</strong> ${data.working} | <strong>Failed:</strong> ${data.failed}</p>
       </div>
       <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; border-radius: 4px;">
     `;
 
     data.results.forEach(result => {
+      const status = result.success ? '✓' : '✗';
+      const color = result.success ? 'var(--success)' : 'var(--error)';
+      const details = result.success 
+        ? ` (${result.elapsed}ms, IP: ${result.detectedIP || 'unknown'})`
+        : ` (${result.error || 'Unknown error'})`;
+      
+      html += `
+        <div style="padding: 5px; border-bottom: 1px solid var(--border);">
+          <span style="color: ${color}; font-weight: bold;">${status}</span>
+          <span style="margin-left: 10px;">${result.proxy}</span>
+          <span style="color: var(--text-secondary); font-size: 0.9em;">${details}</span>
+        </div>
+      `;
+    });
+
+    // Show "Testing..." for remaining proxies
+    const remaining = data.total - data.tested;
+    for (let i = 0; i < remaining; i++) {
+      html += `
+        <div style="padding: 5px; border-bottom: 1px solid var(--border); opacity: 0.5;">
+          <span style="color: var(--text-secondary);">⏳</span>
+          <span style="margin-left: 10px; color: var(--text-secondary);">Testing...</span>
+        </div>
+      `;
+    }
+
+    html += '</div>';
+
+    // Show working proxies count if any
+    if (data.working > 0) {
+      html += `
+        <div style="margin-top: 15px; padding: 10px; background: var(--success); color: white; border-radius: 4px;">
+          ${data.working} working proxy${data.working !== 1 ? 'ies' : ''} found so far...
+        </div>
+      `;
+    }
+
+    resultsDiv.innerHTML = html;
+    
+    // Auto-scroll to bottom to show latest result
+    const scrollContainer = resultsDiv.querySelector('div[style*="max-height"]');
+    if (scrollContainer) {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    }
+  }
+
+  handleProxyBatchTestComplete(data) {
+    const resultsDiv = document.getElementById('proxyTestResults');
+    const loadBtn = document.getElementById('loadProxyList');
+
+    if (!resultsDiv) return;
+
+    // Use stored results or data.results
+    const results = this.proxyTestResults || data.results;
+    const working = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    let html = `
+      <div style="margin-bottom: 15px;">
+        <h3>Test Complete: ${data.working}/${data.total} Working</h3>
+        <p><strong>Working:</strong> ${data.working} | <strong>Failed:</strong> ${data.failed}</p>
+      </div>
+      <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; border-radius: 4px;">
+    `;
+
+    results.forEach(result => {
       const status = result.success ? '✓' : '✗';
       const color = result.success ? 'var(--success)' : 'var(--error)';
       const details = result.success 
@@ -847,34 +1000,77 @@ class FrontierScraperApp {
         </div>
       `;
     } else {
-      loadBtn.disabled = true;
+      // Even if no working proxies, enable button if there's content in textarea
+      const proxyListText = document.getElementById('proxyList').value.trim();
+      loadBtn.disabled = !proxyListText;
       html += `
         <div style="margin-top: 15px; padding: 10px; background: var(--error); color: white; border-radius: 4px;">
-          No working proxies found. Please check your credentials and proxy list.
+          No working proxies found. You can still load all proxies from the list without testing.
         </div>
       `;
     }
 
     resultsDiv.innerHTML = html;
     this.addActivity('Proxy Test', `Test complete: ${data.working}/${data.total} working`);
+    
+    // Clear stored results
+    this.proxyTestResults = null;
   }
 
   async loadProxyList() {
-    if (!this.pendingProxyTest || !this.pendingProxyTest.workingProxies) {
-      alert('No tested proxies available. Please test proxies first.');
+    const proxyListText = document.getElementById('proxyList').value.trim();
+    
+    // Determine which proxies to load
+    let proxiesToLoad = [];
+    let loadingFromTest = false;
+    
+    // If we have tested proxies and working ones, use those (preferred)
+    // But only if we actually have working proxies
+    const hasWorkingTestedProxies = this.pendingProxyTest && 
+                                     this.pendingProxyTest.workingProxies && 
+                                     Array.isArray(this.pendingProxyTest.workingProxies) &&
+                                     this.pendingProxyTest.workingProxies.length > 0;
+    
+    if (hasWorkingTestedProxies) {
+      proxiesToLoad = this.pendingProxyTest.workingProxies;
+      loadingFromTest = true;
+    } else if (proxyListText) {
+      // Otherwise, parse from textarea
+      proxiesToLoad = proxyListText.split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && line.includes(':'));
+      
+      if (proxiesToLoad.length === 0) {
+        alert('No valid proxies found in the list. Format: host:port or host:port:username:password (one per line)');
+        return;
+      }
+      
+      // Confirm when loading without testing
+      const replaceMode = document.querySelector('input[name="proxyMode"]:checked').value === 'replace';
+      const action = replaceMode ? 'replace all existing proxies with' : 'add';
+      const confirmed = confirm(
+        `You are about to ${action} ${proxiesToLoad.length} proxy/proxies without testing them first.\n\n` +
+        `This will load all proxies from the list, including any that may not be working.\n\n` +
+        `Would you like to continue?`
+      );
+      
+      if (!confirmed) {
+        return;
+      }
+    } else {
+      alert('Please enter proxies in the textarea or test proxies first.');
       return;
     }
 
     const replace = document.querySelector('input[name="proxyMode"]:checked').value === 'replace';
-    const { workingProxies, username, password } = this.pendingProxyTest;
-
-    // Get current form values (may have changed)
+    
+    // Get current form values
     const formUsername = document.getElementById('proxyUsername').value.trim();
     const formPassword = document.getElementById('proxyPassword').value.trim();
 
-    // Use form credentials if provided, otherwise use test credentials
-    const finalUsername = formUsername || username;
-    const finalPassword = formPassword || password;
+    // Use form credentials if provided, otherwise use test credentials (if available)
+    const finalUsername = formUsername || (this.pendingProxyTest?.username);
+    const finalPassword = formPassword || (this.pendingProxyTest?.password);
 
     const loadBtn = document.getElementById('loadProxyList');
     loadBtn.disabled = true;
@@ -885,7 +1081,7 @@ class FrontierScraperApp {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          proxies: workingProxies,
+          proxies: proxiesToLoad,
           replace: replace,
           username: finalUsername || undefined,
           password: finalPassword || undefined
@@ -952,12 +1148,13 @@ class FrontierScraperApp {
 
     // Define editable fields with their types
     const editableFields = {
-      'scraper.method': { type: 'select', options: ['playwright', 'decodo'], env: 'SCRAPER_METHOD' },
+      'scraper.method': { type: 'select', options: ['playwright', 'decodo', 'bypass1'], env: 'SCRAPER_METHOD', description: 'Scraper method: playwright (basic), decodo (with proxy rotation), bypass1 (context pooling with visible browser)' },
+      'scraper.bypass1Headless': { type: 'checkbox', env: 'BYPASS1_HEADLESS', description: 'Run BYPASS1 in headless mode (uncheck to see browser windows)' },
       'scraper.timeoutSeconds': { type: 'number', min: 30, max: 300, env: 'SCRAPER_TIMEOUT_SECONDS' },
       'scraper.maxRetries': { type: 'number', min: 1, max: 10, env: 'SCRAPER_MAX_RETRIES' },
-      'scraper.concurrentRoutes': { type: 'number', min: 1, max: 20, env: 'SCRAPER_CONCURRENT_ROUTES' },
+      'scraper.concurrentRoutes': { type: 'number', min: 1, max: 20, env: 'SCRAPER_CONCURRENT_ROUTES', syncWith: 'decodo.maxWorkers' },
       'decodo.maxUsesPerMinute': { type: 'number', min: 1, max: 5, env: 'DECODO_MAX_USES_PER_MINUTE' },
-      'decodo.maxWorkers': { type: 'number', min: 1, max: 10, env: 'DECODO_MAX_WORKERS' },
+      'decodo.maxWorkers': { type: 'number', min: 1, max: 10, env: 'DECODO_MAX_WORKERS', syncWith: 'scraper.concurrentRoutes' },
       'cache.enabled': { type: 'boolean', env: 'CACHE_ENABLED' },
       'logging.level': { type: 'select', options: ['error', 'warn', 'info', 'debug'], env: 'LOG_LEVEL' }
     };
@@ -992,10 +1189,19 @@ class FrontierScraperApp {
             <option value="false" ${value === false ? 'selected' : ''}>Disabled</option>
           </select>
         `;
-      } else if (editable.type === 'number') {
+      } else if (editable.type === 'checkbox') {
+        // For BYPASS1_HEADLESS: checkbox checked = headless (true), unchecked = visible (false)
+        // Note: value is inverted because headless=true means checkbox should be checked
+        const isHeadless = value !== false; // Default true if not explicitly false
         inputHTML = `
-          <input type="number" class="config-input" data-env="${editable.env}"
-                 value="${value}" min="${editable.min}" max="${editable.max}">
+          <input type="checkbox" class="config-input" data-env="${editable.env}" ${isHeadless ? 'checked' : ''} />
+          <label style="margin-left: 8px; font-size: 0.9em; color: var(--text-secondary);">${editable.description || 'Enable'}</label>
+        `;
+      } else if (editable.type === 'number') {
+        const syncNote = editable.syncWith ? ` <small style="color: #666; font-style: italic;">(syncs with ${editable.syncWith.split('.')[1]})</small>` : '';
+        inputHTML = `
+          <input type="number" class="config-input" data-env="${editable.env}" data-sync-with="${editable.syncWith || ''}"
+                 value="${value}" min="${editable.min}" max="${editable.max}">${syncNote}
         `;
       }
 
@@ -1034,6 +1240,22 @@ class FrontierScraperApp {
     // Add event listeners
     document.getElementById('saveConfigButton').addEventListener('click', () => this.saveConfig());
     document.getElementById('clearCacheButton').addEventListener('click', () => this.clearCache());
+    
+    // Sync concurrentRoutes and maxWorkers
+    const concurrentRoutesInput = document.querySelector('[data-env="SCRAPER_CONCURRENT_ROUTES"]');
+    const maxWorkersInput = document.querySelector('[data-env="DECODO_MAX_WORKERS"]');
+    
+    if (concurrentRoutesInput && maxWorkersInput) {
+      // When concurrentRoutes changes, update maxWorkers
+      concurrentRoutesInput.addEventListener('input', (e) => {
+        maxWorkersInput.value = e.target.value;
+      });
+      
+      // When maxWorkers changes, update concurrentRoutes
+      maxWorkersInput.addEventListener('input', (e) => {
+        concurrentRoutesInput.value = e.target.value;
+      });
+    }
   }
 
   async saveConfig() {
@@ -1042,7 +1264,13 @@ class FrontierScraperApp {
 
     inputs.forEach(input => {
       const envKey = input.getAttribute('data-env');
-      updates[envKey] = input.value;
+      // Handle checkboxes differently
+      if (input.type === 'checkbox') {
+        // For BYPASS1_HEADLESS: checked = 'true' (headless), unchecked = 'false' (visible)
+        updates[envKey] = input.checked ? 'true' : 'false';
+      } else {
+        updates[envKey] = input.value;
+      }
     });
 
     try {
@@ -1426,13 +1654,218 @@ class FrontierScraperApp {
     }
   }
 
+  handleBulkByOriginStarted(data) {
+    const progressDiv = document.getElementById('bulkProgress');
+    const routeLog = document.getElementById('bulkRouteLog');
+    
+    if (progressDiv) {
+      progressDiv.style.display = 'block';
+      document.getElementById('bulkTotal').textContent = data.total;
+      document.getElementById('bulkProcessed').textContent = '0';
+      document.getElementById('bulkCached').textContent = '0';
+      document.getElementById('bulkScraped').textContent = '0';
+      document.getElementById('bulkFailed').textContent = '0';
+      document.getElementById('bulkCurrentRoute').textContent = `Starting bulk scrape from ${data.origin}...`;
+      document.getElementById('bulkProgressPercent').textContent = '0%';
+      document.getElementById('bulkProgressBar').style.width = '0%';
+      document.getElementById('bulkProgressBar').textContent = '';
+      
+      if (routeLog) {
+        routeLog.innerHTML = `<div style="color: var(--text-secondary);">Starting bulk scrape of ${data.total} routes from ${data.origin}...</div>`;
+      }
+    }
+    
+    this.addActivity('Bulk Scrape', `Started scraping ${data.total} routes from ${data.origin}`);
+  }
+
+  handleBulkByOriginProgress(data) {
+    const currentRouteEl = document.getElementById('bulkCurrentRoute');
+    if (currentRouteEl) {
+      currentRouteEl.textContent = `Processing: ${data.route} (${data.current}/${data.total})`;
+    }
+    
+    const percent = Math.round((data.current / data.total) * 100);
+    const progressBar = document.getElementById('bulkProgressBar');
+    const progressPercent = document.getElementById('bulkProgressPercent');
+    
+    if (progressBar) {
+      progressBar.style.width = `${percent}%`;
+      progressBar.textContent = `${data.current}/${data.total}`;
+    }
+    
+    if (progressPercent) {
+      progressPercent.textContent = `${percent}%`;
+    }
+  }
+
+  handleBulkRouteUpdate(data, status) {
+    const stats = data.stats || {};
+    const routeLog = document.getElementById('bulkRouteLog');
+    
+    // Update stats
+    if (stats.processed !== undefined) {
+      document.getElementById('bulkProcessed').textContent = stats.processed;
+    }
+    if (stats.cached !== undefined) {
+      document.getElementById('bulkCached').textContent = stats.cached;
+    }
+    if (stats.scraped !== undefined) {
+      document.getElementById('bulkScraped').textContent = stats.scraped;
+    }
+    if (stats.failed !== undefined) {
+      document.getElementById('bulkFailed').textContent = stats.failed;
+    }
+    
+    // Update progress
+    if (data.current && data.total) {
+      const percent = Math.round((data.current / data.total) * 100);
+      const progressBar = document.getElementById('bulkProgressBar');
+      const progressPercent = document.getElementById('bulkProgressPercent');
+      
+      if (progressBar) {
+        progressBar.style.width = `${percent}%`;
+        progressBar.textContent = `${data.current}/${data.total}`;
+      }
+      
+      if (progressPercent) {
+        progressPercent.textContent = `${percent}%`;
+      }
+    }
+    
+    // Add to route log
+    if (routeLog) {
+      const timestamp = new Date(data.timestamp).toLocaleTimeString();
+      let statusIcon, statusText, statusColor;
+      
+      if (status === 'cached') {
+        statusIcon = '💾';
+        statusText = 'Cached';
+        statusColor = 'var(--success)';
+      } else if (status === 'complete') {
+        statusIcon = data.success ? '✓' : '✗';
+        statusText = data.success ? 'Success' : 'Failed';
+        statusColor = data.success ? 'var(--success)' : 'var(--error)';
+      } else {
+        statusIcon = '✗';
+        statusText = 'Error';
+        statusColor = 'var(--error)';
+      }
+      
+      const logEntry = document.createElement('div');
+      logEntry.style.cssText = 'padding: 3px 0; border-bottom: 1px solid var(--border);';
+      logEntry.innerHTML = `
+        <span style="color: var(--text-secondary);">[${timestamp}]</span>
+        <span style="color: ${statusColor}; margin-left: 8px; font-weight: bold;">${statusIcon}</span>
+        <span style="margin-left: 8px;">${data.route}</span>
+        <span style="color: var(--text-secondary); margin-left: 8px;">
+          ${status === 'cached' ? `(${data.flightCount || 0} flights from cache)` : ''}
+          ${status === 'complete' && data.success ? `(${data.flightCount || 0} flights)` : ''}
+          ${status === 'error' ? `(${data.error})` : ''}
+        </span>
+      `;
+      
+      // Remove placeholder if exists
+      const placeholder = routeLog.querySelector('div[style*="color: var(--text-secondary)"]');
+      if (placeholder && placeholder.textContent.includes('Route log will appear')) {
+        routeLog.removeChild(placeholder);
+      }
+      
+      routeLog.insertBefore(logEntry, routeLog.firstChild);
+      
+      // Keep only last 50 entries
+      while (routeLog.children.length > 50) {
+        routeLog.removeChild(routeLog.lastChild);
+      }
+    }
+    
+    // Update current route display
+    const currentRouteEl = document.getElementById('bulkCurrentRoute');
+    if (currentRouteEl && data.current && data.total) {
+      currentRouteEl.textContent = `Processing: ${data.route} (${data.current}/${data.total})`;
+    }
+  }
+
   handleBulkByOriginComplete(data) {
+    const progressDiv = document.getElementById('bulkProgress');
+    const currentRouteEl = document.getElementById('bulkCurrentRoute');
+    const progressBar = document.getElementById('bulkProgressBar');
+    
+    if (currentRouteEl) {
+      currentRouteEl.textContent = `Complete! Processed ${data.stats?.processed || 0}/${data.stats?.total || 0} routes`;
+    }
+    
+    if (progressBar) {
+      progressBar.style.width = '100%';
+      progressBar.textContent = 'Complete';
+    }
+    
+    this.addActivity('Bulk Scrape', `Completed: ${data.stats?.processed || 0}/${data.stats?.total || 0} routes (${data.stats?.cached || 0} cached, ${data.stats?.scraped || 0} scraped, ${data.stats?.failed || 0} failed)`);
+    
     this.bulkResults = data;
     this.displayBulkByOriginResults(data);
     document.getElementById('bulkByOriginButton').disabled = false;
   }
 
+  handleBulkAllStarted(data) {
+    const progressDiv = document.getElementById('bulkProgress');
+    const routeLog = document.getElementById('bulkRouteLog');
+    
+    if (progressDiv) {
+      progressDiv.style.display = 'block';
+      document.getElementById('bulkTotal').textContent = data.total;
+      document.getElementById('bulkProcessed').textContent = '0';
+      document.getElementById('bulkCached').textContent = '0';
+      document.getElementById('bulkScraped').textContent = '0';
+      document.getElementById('bulkFailed').textContent = '0';
+      document.getElementById('bulkCurrentRoute').textContent = `Starting bulk scrape of all routes...`;
+      document.getElementById('bulkProgressPercent').textContent = '0%';
+      document.getElementById('bulkProgressBar').style.width = '0%';
+      document.getElementById('bulkProgressBar').textContent = '';
+      
+      if (routeLog) {
+        routeLog.innerHTML = `<div style="color: var(--text-secondary);">Starting bulk scrape of ${data.total} routes...</div>`;
+      }
+    }
+    
+    this.addActivity('Bulk Scrape', `Started scraping all ${data.total} routes`);
+  }
+
+  handleBulkAllProgress(data) {
+    const currentRouteEl = document.getElementById('bulkCurrentRoute');
+    if (currentRouteEl) {
+      currentRouteEl.textContent = `Processing: ${data.route} (${data.current}/${data.total})`;
+    }
+    
+    const percent = Math.round((data.current / data.total) * 100);
+    const progressBar = document.getElementById('bulkProgressBar');
+    const progressPercent = document.getElementById('bulkProgressPercent');
+    
+    if (progressBar) {
+      progressBar.style.width = `${percent}%`;
+      progressBar.textContent = `${data.current}/${data.total}`;
+    }
+    
+    if (progressPercent) {
+      progressPercent.textContent = `${percent}%`;
+    }
+  }
+
   handleBulkAllComplete(data) {
+    const progressDiv = document.getElementById('bulkProgress');
+    const currentRouteEl = document.getElementById('bulkCurrentRoute');
+    const progressBar = document.getElementById('bulkProgressBar');
+    
+    if (currentRouteEl) {
+      currentRouteEl.textContent = `Complete! Processed ${data.stats?.processed || 0}/${data.stats?.total || 0} routes`;
+    }
+    
+    if (progressBar) {
+      progressBar.style.width = '100%';
+      progressBar.textContent = 'Complete';
+    }
+    
+    this.addActivity('Bulk Scrape', `Completed: ${data.stats?.processed || 0}/${data.stats?.total || 0} routes (${data.stats?.cached || 0} cached, ${data.stats?.scraped || 0} scraped, ${data.stats?.failed || 0} failed)`);
+    
     this.bulkResults = data;
     this.displayBulkAllResults(data);
     document.getElementById('bulkAllButton').disabled = false;

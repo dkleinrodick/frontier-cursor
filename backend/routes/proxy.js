@@ -244,9 +244,16 @@ router.post('/test-batch', async (req, res) => {
       });
     }
 
-    if (!username || !password) {
+    // Check if any proxy needs form credentials (doesn't have embedded credentials)
+    const proxiesNeedingCredentials = proxies.filter(p => {
+      const parts = p.split(':');
+      return parts.length < 4; // Less than 4 parts means no embedded credentials
+    });
+
+    // Only require username/password if some proxies don't have embedded credentials
+    if (proxiesNeedingCredentials.length > 0 && (!username || !password)) {
       return res.status(400).json({
-        error: 'username and password are required'
+        error: 'username and password are required when proxies do not have embedded credentials'
       });
     }
 
@@ -261,49 +268,82 @@ router.post('/test-batch', async (req, res) => {
     (async () => {
       const results = [];
       const { DecodoProxyManager } = require('../services/decodoProxyManager');
+      let testedCount = 0;
 
       for (const proxyStr of proxies) {
         const parts = proxyStr.split(':');
+        let result;
+        
         if (parts.length < 2) {
-          results.push({
+          result = {
             proxy: proxyStr,
             success: false,
             error: 'Invalid format. Expected "host:port" or "host:port:username:password"'
+          };
+        } else {
+          const host = parts[0];
+          const port = parseInt(parts[1]);
+          
+          // Extract username/password from proxy string if provided, otherwise use form defaults
+          let proxyUsername = username || null;
+          let proxyPassword = password || null;
+          
+          if (parts.length >= 4) {
+            // Format: host:port:username:password
+            proxyUsername = parts[2];
+            proxyPassword = parts.slice(3).join(':'); // Handle passwords with colons
+          } else if (parts.length === 3) {
+            // Format: host:port:username (password missing, use form password or null)
+            proxyUsername = parts[2];
+            // password stays as form password or null
+          }
+          // If 2 parts, use form username/password (or null if not provided)
+
+          // Skip test if no credentials available
+          if (!proxyUsername || !proxyPassword) {
+            result = {
+              proxy: proxyStr,
+              success: false,
+              error: 'No credentials available for this proxy'
+            };
+          } else {
+            // Test the proxy
+            const testResult = await DecodoProxyManager.testProxyConnection(host, port, proxyUsername, proxyPassword);
+            result = {
+              proxy: proxyStr,
+              ...testResult
+            };
+          }
+        }
+
+        results.push(result);
+        testedCount++;
+
+        // Broadcast individual result immediately
+        if (global.broadcast) {
+          const working = results.filter(r => r.success).length;
+          const failed = results.filter(r => !r.success).length;
+          
+          global.broadcast({
+            type: 'proxy_batch_test_progress',
+            total: proxies.length,
+            tested: testedCount,
+            working,
+            failed,
+            result: result,
+            results: results,
+            timestamp: new Date().toISOString()
           });
-          continue;
         }
-
-        const host = parts[0];
-        const port = parseInt(parts[1]);
-        
-        // Extract username/password from proxy string if provided, otherwise use defaults
-        let proxyUsername = username;
-        let proxyPassword = password;
-        
-        if (parts.length >= 4) {
-          // Format: host:port:username:password
-          proxyUsername = parts[2];
-          proxyPassword = parts.slice(3).join(':'); // Handle passwords with colons
-        } else if (parts.length === 3) {
-          // Format: host:port:username (password missing, use default)
-          proxyUsername = parts[2];
-          // password stays as default
-        }
-        // If 2 parts, use default username/password
-
-        const result = await DecodoProxyManager.testProxyConnection(host, port, proxyUsername, proxyPassword);
-        results.push({
-          proxy: proxyStr,
-          ...result
-        });
 
         // Small delay between tests
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
 
       const working = results.filter(r => r.success).length;
       const failed = results.filter(r => !r.success).length;
 
+      // Broadcast final complete message
       if (global.broadcast) {
         global.broadcast({
           type: 'proxy_batch_test_complete',

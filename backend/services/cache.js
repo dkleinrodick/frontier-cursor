@@ -90,6 +90,7 @@ class FlightCache {
    */
   async get(origin, destination, date) {
     if (!this.enabled) {
+      logger.debug(`Cache disabled, skipping check for ${origin}-${destination}-${date}`);
       return null;
     }
 
@@ -97,6 +98,7 @@ class FlightCache {
     const entry = this.cache[key];
 
     if (!entry) {
+      logger.debug(`No cache entry found for ${key}`);
       return null;
     }
 
@@ -104,11 +106,13 @@ class FlightCache {
       // Cache expired, remove it
       delete this.cache[key];
       await this.save();
-      logger.info(`Cache expired for ${key}`);
+      const age = Math.round((Date.now() - new Date(entry.timestamp)) / (1000 * 60));
+      logger.info(`Cache expired for ${key} (age: ${age} minutes)`);
       return null;
     }
 
-    logger.info(`Cache hit for ${key} (age: ${Math.round((Date.now() - new Date(entry.timestamp)) / (1000 * 60))} minutes)`);
+    const age = Math.round((Date.now() - new Date(entry.timestamp)) / (1000 * 60));
+    logger.info(`Cache hit for ${key} (age: ${age} minutes)`);
     return entry.data;
   }
 

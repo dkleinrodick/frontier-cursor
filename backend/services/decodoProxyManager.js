@@ -8,6 +8,7 @@ const path = require('path');
 const logger = require('../utils/logger');
 
 const STATE_FILE = path.join(__dirname, '../../cache/proxy-state.json');
+const PROXY_LIST_FILE = path.join(__dirname, '../../cache/proxy-list.json');
 
 class ProxyUsage {
   constructor(proxyId, host, port, username = null, password = null) {
@@ -206,8 +207,11 @@ class DecodoProxyManager {
     this.maxUsesPerMinute = maxUsesPerMinute;
     this.maxWorkers = maxWorkers;
 
-    // If proxyList is provided, use it; otherwise create default 10 proxies
+    // Try to load proxies from file first, then from proxyList parameter, then default
+    const savedProxies = DecodoProxyManager.loadProxyListStatic();
+    
     if (proxyList && Array.isArray(proxyList) && proxyList.length > 0) {
+      // Use provided proxyList
       this.proxies = proxyList.map((proxy, i) => {
         if (typeof proxy === 'string') {
           // Parse format: "host:port" or "host:port:username:password"
@@ -232,6 +236,29 @@ class DecodoProxyManager {
         // Fallback: create default proxy
         return new ProxyUsage(`decodo-${i + 1}`, 'dc.decodo.com', 10001 + i);
       });
+      // Save the new proxy list
+      this.saveProxyList();
+    } else if (savedProxies && savedProxies.length > 0) {
+      // Use saved proxies from file
+      this.proxies = savedProxies.map((p, i) => {
+        const proxy = new ProxyUsage(p.proxyId || `decodo-${i + 1}`, p.host, p.port, p.username || null, p.password || null);
+        // Restore proxy state
+        proxy.lastUsed = p.lastUsed || null;
+        proxy.useCount = p.useCount || 0;
+        proxy.recentUses = p.recentUses || [];
+        proxy.totalRequests = p.totalRequests || 0;
+        proxy.failedRequests = p.failedRequests || 0;
+        proxy.disabled = p.disabled || false;
+        proxy.disabledReason = p.disabledReason || null;
+        proxy.lastTested = p.lastTested || null;
+        proxy.testResult = p.testResult || null;
+        proxy.perimeterXBlocks = p.perimeterXBlocks || [];
+        proxy.cooldownUntil = p.cooldownUntil || null;
+        proxy.cooldownLevel = p.cooldownLevel || 0;
+        proxy.blacklisted = p.blacklisted || false;
+        return proxy;
+      });
+      logger.info(`Loaded ${this.proxies.length} proxies from saved file`);
     } else {
       // Default: 10 proxies
       this.proxies = Array.from({ length: 10 }, (_, i) =>
@@ -270,7 +297,70 @@ class DecodoProxyManager {
     }
   }
 
-  getNextProxy() {
+  /**
+   * Save proxy list to file
+   */
+  saveProxyList() {
+    try {
+      const dir = path.dirname(PROXY_LIST_FILE);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      
+      // Serialize proxy data (excluding functions)
+      const proxyData = this.proxies.map(proxy => ({
+        proxyId: proxy.proxyId,
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.username,
+        password: proxy.password,
+        lastUsed: proxy.lastUsed,
+        useCount: proxy.useCount,
+        recentUses: proxy.recentUses,
+        totalRequests: proxy.totalRequests,
+        failedRequests: proxy.failedRequests,
+        disabled: proxy.disabled,
+        disabledReason: proxy.disabledReason,
+        lastTested: proxy.lastTested,
+        testResult: proxy.testResult,
+        perimeterXBlocks: proxy.perimeterXBlocks,
+        cooldownUntil: proxy.cooldownUntil,
+        cooldownLevel: proxy.cooldownLevel,
+        blacklisted: proxy.blacklisted
+      }));
+      
+      fs.writeFileSync(PROXY_LIST_FILE, JSON.stringify(proxyData, null, 2));
+      logger.info(`Saved ${proxyData.length} proxies to file`);
+    } catch (error) {
+      logger.error(`Failed to save proxy list: ${error.message}`);
+    }
+  }
+
+  /**
+   * Load proxy list from file (static method for use in constructor)
+   */
+  static loadProxyListStatic() {
+    try {
+      if (fs.existsSync(PROXY_LIST_FILE)) {
+        const data = fs.readFileSync(PROXY_LIST_FILE, 'utf8');
+        const proxyData = JSON.parse(data);
+        logger.info(`Found ${proxyData.length} saved proxies in file`);
+        return proxyData;
+      }
+    } catch (error) {
+      logger.warn(`Failed to load proxy list: ${error.message}`);
+    }
+    return null;
+  }
+
+  /**
+   * Load proxy list from file (instance method)
+   */
+  loadProxyList() {
+    return DecodoProxyManager.loadProxyListStatic();
+  }
+
+  getNextProxy(excludeProxyIds = []) {
     if (this.activeWorkers >= this.maxWorkers) {
       return null;
     }
@@ -281,6 +371,11 @@ class DecodoProxyManager {
       this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
       this.saveState(); // Persist rotation state
       attempts++;
+
+      // Skip explicitly excluded proxies (e.g., those that hit PerimeterX in current attempt)
+      if (excludeProxyIds.includes(proxy.proxyId)) {
+        continue;
+      }
 
       // Skip disabled proxies
       if (proxy.disabled) {
@@ -619,7 +714,10 @@ class DecodoProxyManager {
       logger.info(`Added ${newProxies.length} proxies. Total: ${this.proxies.length}`);
     }
 
+    // Save both state and proxy list
     this.saveState();
+    this.saveProxyList();
+    
     return {
       success: true,
       totalProxies: this.proxies.length,
@@ -637,7 +735,7 @@ class DecodoProxyManager {
 
     let browser = null;
     const testUrl = 'https://httpbin.org/ip';
-    const testTimeout = 15000;
+    const testTimeout = 10000; // Reduced to 10 seconds for faster testing
 
     try {
       browser = await chromium.launch({

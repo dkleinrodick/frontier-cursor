@@ -7,6 +7,7 @@ const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
 const { getProxyManager } = require('./decodoProxyManager');
 const { getCache } = require('./cache');
+const { scrapeFlightsBypass1, getInstance: getBypass1Instance } = require('./scraperBypass1');
 const logger = require('../utils/logger');
 
 chromium.use(stealth);
@@ -14,6 +15,7 @@ chromium.use(stealth);
 const SCRAPER_METHOD = process.env.SCRAPER_METHOD || 'playwright';
 const TIMEOUT_SECONDS = parseInt(process.env.SCRAPER_TIMEOUT_SECONDS) || 90;
 const MAX_RETRIES = parseInt(process.env.SCRAPER_MAX_RETRIES) || 3;
+const BYPASS1_HEADLESS = process.env.BYPASS1_HEADLESS !== 'false'; // Default true, set to 'false' for visible windows
 
 /**
  * Scrape flights using Playwright with optional proxy
@@ -55,7 +57,9 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
       'DNT': '1',
-      'Connection': 'keep-alive'
+      'Connection': 'keep-alive',
+      // Don't request images, fonts, etc. to reduce bandwidth
+      'Accept-Encoding': 'gzip, deflate, br'
     });
 
     const page = await context.newPage();
@@ -70,11 +74,11 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
       const url = response.url();
       const status = response.status();
       
-      // Check for PerimeterX indicators in response
+      // Check for PerimeterX indicators in response URL
       if (url.includes('perimeterx') || url.includes('px-captcha') || url.includes('px-block')) {
         logger.warn(`PerimeterX detected in response: ${url}`);
         perimeterXDetected = true;
-        return;
+        return; // Flag is set, checker will catch it
       }
 
       // Check response headers
@@ -82,31 +86,69 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
       if (headers['x-px-block'] || headers['px-block'] || headers['server']?.includes('PerimeterX')) {
         logger.warn(`PerimeterX detected in headers`);
         perimeterXDetected = true;
-        return;
+        return; // Flag is set, checker will catch it
       }
 
-      // Check response body for PerimeterX (if it's HTML)
+      // Check response body for PerimeterX (if it's HTML) - but don't wait for full body
       if (status === 403 || status === 429) {
-        try {
-          const text = await response.text();
-          if (text.includes('PerimeterX') || text.includes('Access Denied') || text.includes('px-captcha')) {
-            logger.warn(`PerimeterX detected in response body (status ${status})`);
-            perimeterXDetected = true;
-          }
-        } catch (e) {
-          // Ignore errors reading response
-        }
+        // For 403/429, immediately flag as PerimeterX without waiting for body
+        logger.warn(`PerimeterX likely (status ${status})`);
+        perimeterXDetected = true;
+        return; // Flag is set, checker will catch it
       }
     });
 
-    // Block unnecessary resources
+    // Aggressive resource blocking to minimize bandwidth usage
     await page.route('**/*', (route) => {
-      const resourceType = route.request().resourceType();
-      const url = route.request().url();
+      const request = route.request();
+      const resourceType = request.resourceType();
+      const url = request.url();
 
-      const blockedDomains = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net'];
-      const shouldBlock = blockedDomains.some(d => url.includes(d)) ||
-                         ['image', 'media', 'font'].includes(resourceType);
+      // Comprehensive block list for tracking, ads, and analytics
+      const blockedDomains = [
+        'google-analytics.com',
+        'googletagmanager.com',
+        'doubleclick.net',
+        'googleadservices.com',
+        'facebook.com',
+        'facebook.net',
+        'twitter.com',
+        'linkedin.com',
+        'pinterest.com',
+        'instagram.com',
+        'youtube.com',
+        'youtube-nocookie.com',
+        'gstatic.com',
+        'googleapis.com',
+        'cloudflare.com',
+        'cdnjs.cloudflare.com',
+        'jsdelivr.net',
+        'unpkg.com',
+        'bootstrapcdn.com',
+        'fontawesome.com',
+        'fonts.googleapis.com',
+        'fonts.gstatic.com',
+        'adservice',
+        'adsystem',
+        'advertising',
+        'tracking',
+        'analytics',
+        'pixel',
+        'beacon',
+        'collector'
+      ];
+
+      const isBlockedDomain = blockedDomains.some(domain => url.includes(domain));
+      
+      // Block resource types we don't need for flight data extraction
+      // Only allow Frontier's own stylesheets (needed for page structure)
+      const shouldBlock = 
+        isBlockedDomain ||
+        resourceType === 'image' ||
+        resourceType === 'media' ||
+        resourceType === 'font' ||
+        resourceType === 'websocket' ||
+        (resourceType === 'stylesheet' && !url.includes('booking.flyfrontier.com'));
 
       shouldBlock ? route.abort() : route.continue();
     });
@@ -143,7 +185,7 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
         throw err;
       });
 
-      // Set up PerimeterX checker that runs every 2 seconds and also checks page state
+      // Set up PerimeterX checker that runs every 1 second for faster detection
       const perimeterXChecker = new Promise((_, reject) => {
         const checkInterval = setInterval(async () => {
           if (perimeterXDetected) {
@@ -163,7 +205,7 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
             return;
           }
           
-          // Periodically check page state even if no response came in
+          // Periodically check page state even if no response came in (faster checks)
           try {
             const pageTitle = await page.title().catch(() => '');
             const url = page.url();
@@ -188,7 +230,7 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
             clearInterval(checkInterval);
             clearTimeout(hardTimeout);
           }
-        }, 2000);
+        }, 1000); // Check every 1 second instead of 2 for faster detection
         
         // Clear interval after timeout
         setTimeout(() => {
@@ -247,9 +289,68 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
       throw new Error('BLOCKED_BY_PERIMETERX');
     }
 
-    logger.info(`Page loaded, waiting 3 seconds for content...`);
-    await page.waitForTimeout(3000);
-    logger.info(`Extracting flight data...`);
+    // Quick check for PerimeterX before waiting for FlightData
+    try {
+      const pageTitle = await page.title().catch(() => '');
+      const url = page.url();
+      
+      if (pageTitle.includes('denied') || pageTitle.includes('blocked') || 
+          url.includes('perimeterx') || url.includes('px-captcha')) {
+        logger.warn(`PerimeterX detected in page title/URL: title="${pageTitle}", url="${url}"`);
+        await browser.close();
+        throw new Error('BLOCKED_BY_PERIMETERX');
+      }
+    } catch (checkError) {
+      if (checkError.message === 'BLOCKED_BY_PERIMETERX') {
+        throw checkError;
+      }
+      // Continue if it's just a check error
+    }
+
+    logger.info(`Page loaded, waiting for flight data script...`);
+    
+    // Wait for the specific script that contains FlightData instead of fixed timeout
+    // But check for PerimeterX during the wait
+    try {
+      await Promise.race([
+        page.waitForFunction(() => {
+          const scripts = document.querySelectorAll('script');
+          for (const script of scripts) {
+            if (script.textContent && script.textContent.includes('FlightData')) {
+              return true;
+            }
+          }
+          return false;
+        }, { timeout: 10000 }),
+        // Also check for PerimeterX periodically during wait
+        new Promise((_, reject) => {
+          const checkInterval = setInterval(async () => {
+            try {
+              const pageTitle = await page.title().catch(() => '');
+              const url = page.url();
+              if (pageTitle.includes('denied') || pageTitle.includes('blocked') || 
+                  url.includes('perimeterx') || url.includes('px-captcha')) {
+                clearInterval(checkInterval);
+                reject(new Error('BLOCKED_BY_PERIMETERX'));
+              }
+            } catch (e) {
+              // Ignore
+            }
+          }, 500); // Check every 500ms
+          
+          setTimeout(() => clearInterval(checkInterval), 10000);
+        })
+      ]);
+      logger.info(`FlightData script found, extracting data...`);
+    } catch (e) {
+      if (e.message === 'BLOCKED_BY_PERIMETERX') {
+        logger.warn(`PerimeterX detected while waiting for FlightData`);
+        await browser.close();
+        throw new Error('BLOCKED_BY_PERIMETERX');
+      }
+      logger.warn(`FlightData script not found immediately, proceeding anyway...`);
+      await page.waitForTimeout(1000); // Small fallback delay
+    }
 
     // Final check for bot detection in page content
     const pageContent = await page.content();
@@ -354,7 +455,8 @@ async function scrapeFlightsWithDecodo(origin, destination, date) {
   let lastError = null;
   let consecutiveBlocks = 0;
   const triedProxies = new Set();
-  const totalProxies = 10; // Total Decodo proxies available
+  const perimeterXProxies = new Set(); // Track proxies that hit PerimeterX in this attempt
+  const totalProxies = proxyManager.proxies.length; // Get actual proxy count
   const maxWaitTime = 120000; // Max 2 minutes total wait time
 
   const startTime = Date.now();
@@ -380,7 +482,8 @@ async function scrapeFlightsWithDecodo(origin, destination, date) {
       });
     }
 
-    const proxy = proxyManager.getNextProxy();
+    // Get next proxy, excluding those that hit PerimeterX in this attempt
+    const proxy = proxyManager.getNextProxy(Array.from(perimeterXProxies));
 
     if (!proxy) {
       // No proxies available due to rate limiting
@@ -425,19 +528,26 @@ async function scrapeFlightsWithDecodo(origin, destination, date) {
       logger.error(`Error stack: ${error.stack}`);
       
       const isPerimeterX = error.message === 'BLOCKED_BY_PERIMETERX';
-      proxyManager.releaseProxy(proxy.proxyId, false, isPerimeterX);
-      lastError = error;
-
+      
       if (isPerimeterX) {
+        // Record PerimeterX hit immediately
+        proxyManager.releaseProxy(proxy.proxyId, false, true);
+        perimeterXProxies.add(proxy.proxyId); // Mark as PerimeterX hit - won't try again this attempt
         consecutiveBlocks++;
-        logger.warn(`PerimeterX block detected (${consecutiveBlocks} consecutive blocks) - proxy ${proxy.proxyId} will be cooldowned`);
-        // Continue trying with other proxies
+        logger.warn(`PerimeterX block detected on proxy ${proxy.proxyId} - marking for cooldown and skipping for rest of this attempt`);
+        lastError = error;
+        
+        // Immediately try next proxy (don't wait, don't retry this one)
         continue;
-      }
+      } else {
+        // Non-PerimeterX error - release proxy normally
+        proxyManager.releaseProxy(proxy.proxyId, false, false);
+        lastError = error;
 
-      // For non-PerimeterX errors, respect MAX_RETRIES
-      if (attempt >= MAX_RETRIES) {
-        break;
+        // For non-PerimeterX errors, respect MAX_RETRIES
+        if (attempt >= MAX_RETRIES) {
+          break;
+        }
       }
     }
   }
@@ -459,9 +569,10 @@ async function scrapeFlights(origin, destination, date) {
 
   try {
     // Check cache first
+    logger.debug(`Checking cache for ${origin}-${destination} on ${date} (method: ${SCRAPER_METHOD})`);
     const cachedData = await cache.get(origin, destination, date);
     if (cachedData) {
-      logger.info(`Returning cached data for ${origin}-${destination} on ${date}`);
+      logger.info(`Returning cached data for ${origin}-${destination} on ${date} (${cachedData.flights?.length || 0} flights)`);
 
       if (global.broadcast) {
         global.broadcast({
@@ -484,9 +595,31 @@ async function scrapeFlights(origin, destination, date) {
     }
 
     // No cache, scrape live
+    logger.info(`No cache found for ${origin}-${destination} on ${date}, scraping live with ${SCRAPER_METHOD}`);
     let result;
 
-    if (SCRAPER_METHOD === 'decodo') {
+    if (SCRAPER_METHOD === 'bypass1') {
+      // Use BYPASS1 scraper with context pooling
+      const bypass1Options = {
+        headless: BYPASS1_HEADLESS,
+        useProxy: true, // Use Decodo proxies
+        parallelContexts: parseInt(process.env.SCRAPER_CONCURRENT_ROUTES) || 5,
+        timeout: TIMEOUT_SECONDS * 1000,
+        waitAfterLoad: 5000
+      };
+      
+      try {
+        const flights = await scrapeFlightsBypass1(origin, destination, date, bypass1Options);
+        result = { success: true, flights, attempts: 1, method: 'bypass1' };
+      } catch (error) {
+        result = { 
+          success: false, 
+          error: error.message, 
+          attempts: 1,
+          method: 'bypass1' 
+        };
+      }
+    } else if (SCRAPER_METHOD === 'decodo') {
       result = await scrapeFlightsWithDecodo(origin, destination, date);
     } else {
       const flights = await scrapeFlightsPlaywright(origin, destination, date);

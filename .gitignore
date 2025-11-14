@@ -44,3 +44,6 @@ debug_*.png
 
 # Playwright
 playwright/.cache/
+
+# Test files (optional - comment out if you want to commit tests)
+# tests/

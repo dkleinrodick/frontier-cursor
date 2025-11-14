@@ -132,7 +132,9 @@ app.use((err, req, res, next) => {
 if (process.env.DECODO_USERNAME && process.env.DECODO_PASSWORD) {
   try {
     const maxUsesPerMinute = parseInt(process.env.DECODO_MAX_USES_PER_MINUTE) || 2;
-    const maxWorkers = parseInt(process.env.DECODO_MAX_WORKERS) || 3;
+    // Use SCRAPER_CONCURRENT_ROUTES as default for maxWorkers to keep them in sync
+    const concurrentRoutes = parseInt(process.env.SCRAPER_CONCURRENT_ROUTES) || 5;
+    const maxWorkers = parseInt(process.env.DECODO_MAX_WORKERS) || concurrentRoutes;
 
     initializeProxyManager(
       process.env.DECODO_USERNAME,

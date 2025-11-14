@@ -201,13 +201,29 @@
                                 <div class="stat-label">Processed</div>
                             </div>
                             <div class="stat-card success">
-                                <div class="stat-value" id="bulkSuccess">0</div>
-                                <div class="stat-label">Successful</div>
+                                <div class="stat-value" id="bulkCached">0</div>
+                                <div class="stat-label">Cached</div>
+                            </div>
+                            <div class="stat-card" style="background: var(--primary); color: white;">
+                                <div class="stat-value" id="bulkScraped">0</div>
+                                <div class="stat-label">Scraped</div>
                             </div>
                             <div class="stat-card error">
                                 <div class="stat-value" id="bulkFailed">0</div>
                                 <div class="stat-label">Failed</div>
                             </div>
+                        </div>
+                        <div style="margin-top: 20px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span id="bulkCurrentRoute" style="font-weight: bold; color: var(--text-primary);">Starting...</span>
+                                <span id="bulkProgressPercent" style="color: var(--text-secondary);">0%</span>
+                            </div>
+                            <div style="background: var(--border); height: 25px; border-radius: 12px; overflow: hidden;">
+                                <div id="bulkProgressBar" style="background: var(--primary); height: 100%; width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.85em; font-weight: bold;"></div>
+                            </div>
+                        </div>
+                        <div id="bulkRouteLog" style="margin-top: 15px; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; border-radius: 4px; background: var(--bg-secondary); font-family: monospace; font-size: 0.9em;">
+                            <div style="color: var(--text-secondary);">Route log will appear here...</div>
                         </div>
                     </div>
 
