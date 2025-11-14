@@ -76,7 +76,7 @@ If you scrape 1000 routes:
 
 ## Testing
 
-A test script is available in `bandwidth-test/test-bandwidth-scraper.js` to verify:
+A test script is available in `tests/bandwidth-test/test-bandwidth-scraper.js` to verify:
 1. Bandwidth usage per scrape
 2. Resource blocking effectiveness
 3. Flight data extraction still works correctly

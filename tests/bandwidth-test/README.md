@@ -19,7 +19,7 @@ This folder contains a test version of the scraper with aggressive bandwidth opt
 
 ```bash
 # From the main project directory
-cd bandwidth-test
+cd tests/bandwidth-test
 node test-bandwidth-scraper.js
 ```
 
