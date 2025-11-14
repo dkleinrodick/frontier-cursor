@@ -536,6 +536,22 @@ body {
   border-left: 4px solid var(--warning);
 }
 
+.proxy-item.cooldown {
+  border-left: 4px solid #ff8800;
+  background: rgba(255, 136, 0, 0.1);
+}
+
+.proxy-item.blacklisted {
+  border-left: 4px solid var(--error);
+  background: rgba(220, 53, 69, 0.1);
+  opacity: 0.7;
+}
+
+.proxy-item.disabled {
+  border-left: 4px solid var(--text-secondary);
+  opacity: 0.6;
+}
+
 .proxy-info {
   display: grid;
   gap: 8px;
@@ -730,4 +746,95 @@ body {
 
 .btn-secondary:hover {
   background: var(--bg-card);
+}
+
+/* Bulk Mode Sections */
+.bulk-mode-section {
+  margin-top: 20px;
+}
+
+.form-control {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Hierarchical Results Display */
+.destinations-list,
+.origins-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.destination-item,
+.origin-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.destination-item:hover,
+.origin-item:hover {
+  border-color: var(--primary);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px var(--shadow);
+}
+
+.destination-route,
+.origin-code {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.destination-count,
+.origin-stats {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.origin-item {
+  text-align: center;
+}
+
+.origin-code {
+  font-size: 24px;
+  margin-bottom: 12px;
+}
+
+/* Select dropdowns */
+select {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--primary);
 }

@@ -22,6 +22,7 @@ const http = require('http');
 const scraperRoutes = require('./routes/scraper');
 const proxyRoutes = require('./routes/proxy');
 const configRoutes = require('./routes/config');
+const routeRoutes = require('./routes/routes');
 const { initializeProxyManager } = require('./services/decodoProxyManager');
 const logger = require('./utils/logger');
 
@@ -95,6 +96,7 @@ app.use(express.static(path.join(__dirname, '..', 'frontend')));
 app.use('/api/scraper', scraperRoutes);
 app.use('/api/proxy', proxyRoutes);
 app.use('/api/config', configRoutes);
+app.use('/api/routes', routeRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

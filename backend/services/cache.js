@@ -78,6 +78,16 @@ class FlightCache {
     return true;
   }
 
+  /**
+   * Check if cache should be used (respects enabled setting)
+   */
+  shouldUseCache() {
+    return this.enabled;
+  }
+
+  /**
+   * Get cached data (only if cache is enabled)
+   */
   async get(origin, destination, date) {
     if (!this.enabled) {
       return null;
@@ -102,11 +112,11 @@ class FlightCache {
     return entry.data;
   }
 
+  /**
+   * Always save to cache (regardless of enabled setting)
+   * This ensures searches are cached for future use even if cache checking is disabled
+   */
   async set(origin, destination, date, data) {
-    if (!this.enabled) {
-      return;
-    }
-
     const key = this.getCacheKey(origin, destination, date);
 
     this.cache[key] = {
@@ -115,7 +125,37 @@ class FlightCache {
     };
 
     await this.save();
-    logger.info(`Cached ${data.flights?.length || 0} flights for ${key}`);
+    logger.info(`Cached ${data.flights?.length || 0} flights for ${key}${!this.enabled ? ' (cache checking disabled, but saved for future)' : ''}`);
+  }
+
+  /**
+   * Check if a route is cached (without respecting enabled setting)
+   * Used for cache-aware bulk operations
+   */
+  async hasCache(origin, destination, date) {
+    const key = this.getCacheKey(origin, destination, date);
+    const entry = this.cache[key];
+    
+    if (!entry) {
+      return false;
+    }
+    
+    return this.isValidCache(entry);
+  }
+
+  /**
+   * Get cached data without checking enabled setting
+   * Used for cache-aware bulk operations
+   */
+  async getUnchecked(origin, destination, date) {
+    const key = this.getCacheKey(origin, destination, date);
+    const entry = this.cache[key];
+
+    if (!entry || !this.isValidCache(entry)) {
+      return null;
+    }
+
+    return entry.data;
   }
 
   async clear() {

@@ -24,7 +24,7 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
   try {
     const url = `https://booking.flyfrontier.com/Flight/InternalSelect?o1=${origin}&d1=${destination}&dd1=${date}&adt=1&umnr=false&loy=false&mon=true&ftype=GW`;
 
-    logger.debug(`Scraping ${origin}->${destination} on ${date}`);
+    logger.info(`Scraping ${origin}->${destination} on ${date}${proxyConfig ? ` with proxy ${proxyConfig.server}` : ' (direct)'}`);
 
     // Launch browser
     const launchOptions = {
@@ -60,6 +60,45 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
 
     const page = await context.newPage();
 
+    // Track PerimeterX blocking
+    let perimeterXDetected = false;
+    let responseReceived = false;
+
+    // Intercept responses to detect PerimeterX early
+    page.on('response', async (response) => {
+      responseReceived = true;
+      const url = response.url();
+      const status = response.status();
+      
+      // Check for PerimeterX indicators in response
+      if (url.includes('perimeterx') || url.includes('px-captcha') || url.includes('px-block')) {
+        logger.warn(`PerimeterX detected in response: ${url}`);
+        perimeterXDetected = true;
+        return;
+      }
+
+      // Check response headers
+      const headers = response.headers();
+      if (headers['x-px-block'] || headers['px-block'] || headers['server']?.includes('PerimeterX')) {
+        logger.warn(`PerimeterX detected in headers`);
+        perimeterXDetected = true;
+        return;
+      }
+
+      // Check response body for PerimeterX (if it's HTML)
+      if (status === 403 || status === 429) {
+        try {
+          const text = await response.text();
+          if (text.includes('PerimeterX') || text.includes('Access Denied') || text.includes('px-captcha')) {
+            logger.warn(`PerimeterX detected in response body (status ${status})`);
+            perimeterXDetected = true;
+          }
+        } catch (e) {
+          // Ignore errors reading response
+        }
+      }
+    });
+
     // Block unnecessary resources
     await page.route('**/*', (route) => {
       const resourceType = route.request().resourceType();
@@ -72,16 +111,152 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
       shouldBlock ? route.abort() : route.continue();
     });
 
-    page.setDefaultTimeout(TIMEOUT_SECONDS * 1000);
+    // Use a shorter timeout for navigation (30 seconds)
+    const NAVIGATION_TIMEOUT = 30000;
+    page.setDefaultTimeout(NAVIGATION_TIMEOUT);
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_SECONDS * 1000 });
+    logger.info(`Navigating to: ${url}`);
+    
+    let navigationCompleted = false;
+    let navigationError = null;
+    let timeoutReached = false;
+    
+    // Set up a hard timeout that will force failure after 30 seconds
+    const hardTimeout = setTimeout(() => {
+      if (!navigationCompleted) {
+        timeoutReached = true;
+        logger.warn('Hard timeout reached (30s) - navigation taking too long');
+      }
+    }, NAVIGATION_TIMEOUT);
+    
+    try {
+      // Set up a timeout that will reject if navigation takes too long
+      const navigationPromise = page.goto(url, { 
+        waitUntil: 'domcontentloaded', 
+        timeout: NAVIGATION_TIMEOUT 
+      }).then(() => {
+        navigationCompleted = true;
+        clearTimeout(hardTimeout);
+      }).catch((err) => {
+        navigationError = err;
+        clearTimeout(hardTimeout);
+        throw err;
+      });
+
+      // Set up PerimeterX checker that runs every 2 seconds and also checks page state
+      const perimeterXChecker = new Promise((_, reject) => {
+        const checkInterval = setInterval(async () => {
+          if (perimeterXDetected) {
+            clearInterval(checkInterval);
+            clearTimeout(hardTimeout);
+            navigationCompleted = true;
+            reject(new Error('BLOCKED_BY_PERIMETERX'));
+            return;
+          }
+          
+          // Check if hard timeout was reached
+          if (timeoutReached) {
+            clearInterval(checkInterval);
+            clearTimeout(hardTimeout);
+            navigationCompleted = true;
+            reject(new Error('BLOCKED_BY_PERIMETERX'));
+            return;
+          }
+          
+          // Periodically check page state even if no response came in
+          try {
+            const pageTitle = await page.title().catch(() => '');
+            const url = page.url();
+            
+            // Check if we're stuck on a different page or blocked
+            if (pageTitle.includes('denied') || pageTitle.includes('blocked') || 
+                url.includes('perimeterx') || url.includes('px-captcha')) {
+              logger.warn(`PerimeterX detected via page state check: title="${pageTitle}", url="${url}"`);
+              perimeterXDetected = true;
+              clearInterval(checkInterval);
+              clearTimeout(hardTimeout);
+              navigationCompleted = true;
+              reject(new Error('BLOCKED_BY_PERIMETERX'));
+              return;
+            }
+          } catch (checkError) {
+            // Ignore errors from checking page state
+          }
+          
+          // If navigation completed, stop checking
+          if (navigationCompleted) {
+            clearInterval(checkInterval);
+            clearTimeout(hardTimeout);
+          }
+        }, 2000);
+        
+        // Clear interval after timeout
+        setTimeout(() => {
+          clearInterval(checkInterval);
+        }, NAVIGATION_TIMEOUT + 1000);
+      });
+
+      // Race between navigation and PerimeterX detection
+      await Promise.race([navigationPromise, perimeterXChecker]);
+      
+      clearTimeout(hardTimeout);
+      logger.info('Navigation completed successfully');
+    } catch (error) {
+      clearTimeout(hardTimeout);
+      logger.error(`Navigation error: ${error.message}`);
+      
+      // Check if it's a timeout or if we detected PerimeterX
+      if (error.message === 'BLOCKED_BY_PERIMETERX' || perimeterXDetected || timeoutReached) {
+        logger.warn('Navigation failed - treating as PerimeterX block');
+        
+        // Try to get page content to check for PerimeterX
+        try {
+          const pageContent = await page.content().catch(() => '');
+          const pageTitle = await page.title().catch(() => '');
+          
+          logger.info(`Page state after failure: title="${pageTitle.substring(0, 100)}", content length=${pageContent.length}`);
+          
+          if (pageTitle.includes('denied') || pageContent.includes('PerimeterX') || 
+              pageContent.includes('px-captcha') || pageContent.includes('Access Denied')) {
+            logger.warn('PerimeterX confirmed in page content');
+          }
+        } catch (checkError) {
+          logger.warn(`Could not check page content: ${checkError.message}`);
+        }
+        
+        await browser.close();
+        throw new Error('BLOCKED_BY_PERIMETERX');
+      }
+      
+      // Check if it's a timeout error
+      if (error.message.includes('Timeout') || error.message.includes('timeout') || 
+          error.name === 'TimeoutError' || !navigationCompleted) {
+        logger.warn('Navigation timed out - likely blocked or slow connection');
+        await browser.close();
+        throw new Error('BLOCKED_BY_PERIMETERX');
+      }
+      
+      // Re-throw other errors
+      throw error;
+    }
+
+    // Final check for PerimeterX after navigation
+    if (perimeterXDetected) {
+      logger.warn('PerimeterX detected after navigation');
+      await browser.close();
+      throw new Error('BLOCKED_BY_PERIMETERX');
+    }
+
+    logger.info(`Page loaded, waiting 3 seconds for content...`);
     await page.waitForTimeout(3000);
+    logger.info(`Extracting flight data...`);
 
-    // Check for bot detection
+    // Final check for bot detection in page content
     const pageContent = await page.content();
     const pageTitle = await page.title();
 
-    if (pageTitle.includes('denied') || pageContent.includes('PerimeterX')) {
+    if (pageTitle.includes('denied') || pageContent.includes('PerimeterX') || 
+        pageContent.includes('px-captcha') || pageContent.includes('Access Denied')) {
       await browser.close();
       throw new Error('BLOCKED_BY_PERIMETERX');
     }
@@ -114,8 +289,12 @@ async function scrapeFlightsPlaywright(origin, destination, date, proxyConfig = 
     await browser.close();
 
     if (!flightData || !flightData.journeys || !flightData.journeys[0]) {
+      logger.warn(`No flight data found for ${origin}-${destination}. Page title: ${pageTitle}`);
+      logger.warn(`Page content preview: ${pageContent.substring(0, 500)}`);
       throw new Error('NO_FLIGHT_DATA');
     }
+    
+    logger.info(`Found flight data with ${flightData.journeys.length} journey(s)`);
 
     const journey = flightData.journeys[0];
     const flights = [];
@@ -227,11 +406,12 @@ async function scrapeFlightsWithDecodo(origin, destination, date) {
     logger.info(`Attempt ${attempt} using proxy ${proxy.proxyId} (${triedProxies.size}/${totalProxies} proxies tried)`);
 
     try {
+      logger.info(`Starting scrape attempt ${attempt} for ${origin}-${destination} using ${proxy.proxyId}`);
       const flights = await scrapeFlightsPlaywright(origin, destination, date, proxy.playwrightConfig);
 
-      proxyManager.releaseProxy(proxy.proxyId, true);
+      proxyManager.releaseProxy(proxy.proxyId, true, false);
 
-      logger.info(`Successfully scraped ${flights.length} flights for ${origin}-${destination}`);
+      logger.info(`Successfully scraped ${flights.length} flights for ${origin}-${destination} using ${proxy.proxyId}`);
 
       return {
         success: true,
@@ -242,12 +422,15 @@ async function scrapeFlightsWithDecodo(origin, destination, date) {
 
     } catch (error) {
       logger.error(`Attempt ${attempt} with ${proxy.proxyId} failed: ${error.message}`);
-      proxyManager.releaseProxy(proxy.proxyId, false);
+      logger.error(`Error stack: ${error.stack}`);
+      
+      const isPerimeterX = error.message === 'BLOCKED_BY_PERIMETERX';
+      proxyManager.releaseProxy(proxy.proxyId, false, isPerimeterX);
       lastError = error;
 
-      if (error.message === 'BLOCKED_BY_PERIMETERX') {
+      if (isPerimeterX) {
         consecutiveBlocks++;
-        logger.warn(`PerimeterX block detected (${consecutiveBlocks} consecutive blocks)`);
+        logger.warn(`PerimeterX block detected (${consecutiveBlocks} consecutive blocks) - proxy ${proxy.proxyId} will be cooldowned`);
         // Continue trying with other proxies
         continue;
       }
@@ -336,7 +519,11 @@ async function scrapeFlights(origin, destination, date) {
     };
 
   } catch (error) {
-    logger.error(`Scraping failed for ${origin}-${destination}:`, error);
+    logger.error(`Scraping failed for ${origin}-${destination}: ${error.message}`);
+    logger.error(`Error details:`, error);
+    if (error.stack) {
+      logger.error(`Stack trace: ${error.stack}`);
+    }
 
     if (global.broadcast) {
       global.broadcast({
